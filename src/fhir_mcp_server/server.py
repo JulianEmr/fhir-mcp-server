@@ -178,83 +178,301 @@ def register_mcp_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         description=(
-            "Retrieves metadata about a specified FHIR resource type, including its supported search parameters and custom operations. "
-            "This tool MUST always be invoked before performing any resource operation (such as search, read, create, update, or delete) "
-            "to discover the valid searchParams and operations permitted for that resource type. "
-            "Do not use this tool to fetch actual resources."
+            "Récupère les allergies connues d'un patient donné en effectuant une interaction FHIR `search` sur la ressource AllergyIntolerance, en utilisant l'identifiant du patient comme paramètre de recherche. "
         )
     )
-    async def get_capabilities(
-        type: Annotated[
+    async def get_allergies(
+        patient_id: Annotated[
             str,
             Field(
                 description=(
-                    "The FHIR resource type name. Must exactly match one of the core or "
-                    "profile-defined resource types as per the FHIR specification."
+                    "L'identifiant du patient pour lequel récupérer les allergies. Cet identifiant est en format UUID."
                 ),
-                examples=["Patient", "Observation", "Encounter"],
+                examples=["ea66758f-4c82-4b43-9171-bc803eaac8e1", "f7d82e70-e642-44ca-9d3c-6558418a60c0"],
             ),
         ],
     ) -> Annotated[
-        Dict[str, Any],
+        list[Dict[str, Any]] | Dict[str, Any],
         Field(
-            description=(
-                "A dictionary containing: "
-                "'type': The requested resource type (if supported by the system) or empty. "
-                "'searchParam': A mapping of FHIR search parameter names to their descriptions. Each key is a parameter name "
-                "(e.g., family, _id, _lastUpdated), and each value is a string describing the parameter's meaning and usage constraints. "
-                "'operation': A mapping of custom FHIR operation names to their descriptions. Each key is an operation name "
-                "(e.g., $validate), and each value is a string explaining the operation's purpose and usage. "
-                "'interaction': A list of supported interactions for the resource type (e.g., read, search-type, create). "
-                "'searchInclude': A list of supported _include parameters for the resource type, indicating which related resources can be included. "
-                "'searchRevInclude': A list of supported _revinclude parameters for the resource type, indicating which reverse-included resources can be included."
-            )
+            description="Un dictionnaire contenant l'instance de ressource FHIR complète correspondant aux critères de recherche."
         ),
     ]:
         try:
-            logger.debug(f"Invoked with resource_type='{type}'")
-            data: Dict[str, Any] = await get_capability_statement(configs.metadata_url)
-            for resource in data["rest"][0]["resource"]:
-                if resource.get("type") == type:
-                    logger.info(
-                        f"Resource type '{type}' found in the CapabilityStatement."
-                    )
-                    return {
-                        "type": resource.get("type"),
-                        "searchParam": trim_resource_capabilities(
-                            resource.get("searchParam", [])
-                        ),
-                        "operation": trim_resource_capabilities(
-                            resource.get("operation", [])
-                        ),
-                        "interaction": resource.get("interaction", []),
-                        "searchInclude": resource.get("searchInclude", []),
-                        "searchRevInclude": resource.get("searchRevInclude", []),
-                    }
-            logger.info(f"Resource type '{type}' not found in the CapabilityStatement.")
-            return await get_operation_outcome(
-                code="not-supported",
-                diagnostics=f"The interaction, operation, resource or profile {type} is not supported.",
+            logger.debug(f"Invoked get_allergies with patient_id='{patient_id}'")
+            if not patient_id:
+                logger.error(
+                    "Unable to perform search operation: 'patient_id' is a mandatory field."
+                )
+                return await get_operation_outcome_required_error("patient_id")
+
+            client: AsyncFHIRClient = await get_async_fhir_client()
+            async_resources: list[Any] = (
+                await client.resources("AllergyIntolerance").search(patient=patient_id).fetch_raw()
             )
+            logger.debug("Async resources fetched:", async_resources) 
+            return async_resources
+        except ValueError as ex:
+            logger.exception(
+                f"User does not have permission to perform FHIR 'AllergyIntolerance' resource search operation. Caused by, ",
+                exc_info=ex,
+            )
+            return await get_operation_outcome(
+                code="forbidden",
+                diagnostics=f"The user does not have the rights to perform search operation.",
+            )
+        except OperationOutcome as ex:
+            logger.exception(
+                f"FHIR server returned an OperationOutcome error while searching the resource: 'AllergyIntolerance', Caused by,",
+                exc_info=ex,
+            )
+            return ex.resource["issue"] or await get_operation_outcome_exception()
         except Exception as ex:
             logger.exception(
-                f"Error while executing the FHIR metadata interaction for resource_type '{type}'. Caused by, ",
+                f"An unexpected error occurred during the FHIR search operation for resource: '{type}'. Caused by, ",
                 exc_info=ex,
             )
         return await get_operation_outcome_exception()
 
     @mcp.tool(
         description=(
-            "Executes a standard FHIR `search` interaction on a given resource type, returning a bundle or list of matching resources. "
-            "Use this when you need to query for multiple resources based on one or more search-parameters. "
-            "Do not use this tool for create, update, or delete operations, and be aware that large result sets may be paginated by the FHIR server."
+            "Récupère les antécédents d'un patient donné en effectuant une interaction FHIR `search` sur la ressource Condition, avec en catégorie 'problem-list-item', en utilisant l'identifiant du patient comme paramètre de recherche. "
+        )
+    )
+    async def get_history(
+        patient_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "L'identifiant du patient pour lequel récupérer les antécédents. Cet identifiant est en format UUID."
+                ),
+                examples=["ea66758f-4c82-4b43-9171-bc803eaac8e1", "f7d82e70-e642-44ca-9d3c-6558418a60c0"],
+            ),
+        ],
+    ) -> Annotated[
+        list[Dict[str, Any]] | Dict[str, Any],
+        Field(
+            description="Un dictionnaire contenant l'instance de ressource FHIR complète correspondant aux critères de recherche."
+        ),
+    ]:
+        try:
+            logger.debug(f"Invoked get_history with patient_id='{patient_id}'")
+            if not patient_id:
+                logger.error(
+                    "Unable to perform search operation: 'patient_id' is a mandatory field."
+                )
+                return await get_operation_outcome_required_error("patient_id")
+
+            client: AsyncFHIRClient = await get_async_fhir_client()
+            async_resources: list[Any] = (
+                await client.resources("Condition").search(subject=patient_id, category="problem-list-item").fetch_raw()
+            )
+            logger.debug("Async resources fetched:", async_resources) 
+            return async_resources
+        except ValueError as ex:
+            logger.exception(
+                f"User does not have permission to perform FHIR 'Condition' resource search operation. Caused by, ",
+                exc_info=ex,
+            )
+            return await get_operation_outcome(
+                code="forbidden",
+                diagnostics=f"The user does not have the rights to perform search operation.",
+            )
+        except OperationOutcome as ex:
+            logger.exception(
+                f"FHIR server returned an OperationOutcome error while searching the resource: 'Condition', Caused by,",
+                exc_info=ex,
+            )
+            return ex.resource["issue"] or await get_operation_outcome_exception()
+        except Exception as ex:
+            logger.exception(
+                f"An unexpected error occurred during the FHIR search operation for resource: '{type}'. Caused by, ",
+                exc_info=ex,
+            )
+        return await get_operation_outcome_exception()
+
+    @mcp.tool(
+        description=(
+            "Récupère les diagnostics d'un patient donné en effectuant une interaction FHIR `search` sur la ressource Condition, avec en catégorie 'encounter-diagnosis', en utilisant l'identifiant du patient comme paramètre de recherche. "
+        )
+    )
+    async def get_diagnosis(
+        patient_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "L'identifiant du patient pour lequel récupérer les diagnostics. Cet identifiant est en format UUID."
+                ),
+                examples=["ea66758f-4c82-4b43-9171-bc803eaac8e1", "f7d82e70-e642-44ca-9d3c-6558418a60c0"],
+            ),
+        ],
+    ) -> Annotated[
+        list[Dict[str, Any]] | Dict[str, Any],
+        Field(
+            description="Un dictionnaire contenant l'instance de ressource FHIR complète correspondant aux critères de recherche."
+        ),
+    ]:
+        try:
+            logger.debug(f"Invoked get_history with patient_id='{patient_id}'")
+            if not patient_id:
+                logger.error(
+                    "Unable to perform search operation: 'patient_id' is a mandatory field."
+                )
+                return await get_operation_outcome_required_error("patient_id")
+
+            client: AsyncFHIRClient = await get_async_fhir_client()
+            async_resources: list[Any] = (
+                await client.resources("Condition").search(subject=patient_id, category="encounter-diagnosis").fetch_raw()
+            )
+            logger.debug("Async resources fetched:", async_resources) 
+            return async_resources
+        except ValueError as ex:
+            logger.exception(
+                f"User does not have permission to perform FHIR 'Condition' resource search operation. Caused by, ",
+                exc_info=ex,
+            )
+            return await get_operation_outcome(
+                code="forbidden",
+                diagnostics=f"The user does not have the rights to perform search operation.",
+            )
+        except OperationOutcome as ex:
+            logger.exception(
+                f"FHIR server returned an OperationOutcome error while searching the resource: 'Condition', Caused by,",
+                exc_info=ex,
+            )
+            return ex.resource["issue"] or await get_operation_outcome_exception()
+        except Exception as ex:
+            logger.exception(
+                f"An unexpected error occurred during the FHIR search operation for resource: '{type}'. Caused by, ",
+                exc_info=ex,
+            )
+        return await get_operation_outcome_exception()
+
+    @mcp.tool(
+        description=(
+            "Récupère les résultats de laboratoire d'un patient donné en effectuant une interaction FHIR `search` sur la ressource Observation, avec en catégorie 'laboratory', en utilisant l'identifiant du patient comme paramètre de recherche. "
+        )
+    )
+    async def get_lab_results(
+        patient_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "L'identifiant du patient pour lequel récupérer les résultats de laboratoire. Cet identifiant est en format UUID."
+                ),
+                examples=["ea66758f-4c82-4b43-9171-bc803eaac8e1", "f7d82e70-e642-44ca-9d3c-6558418a60c0"],
+            ),
+        ],
+    ) -> Annotated[
+        list[Dict[str, Any]] | Dict[str, Any],
+        Field(
+            description="Un dictionnaire contenant l'instance de ressource FHIR complète correspondant aux critères de recherche."
+        ),
+    ]:
+        try:
+            logger.debug(f"Invoked get_history with patient_id='{patient_id}'")
+            if not patient_id:
+                logger.error(
+                    "Unable to perform search operation: 'patient_id' is a mandatory field."
+                )
+                return await get_operation_outcome_required_error("patient_id")
+
+            client: AsyncFHIRClient = await get_async_fhir_client()
+            async_resources: list[Any] = (
+                await client.resources("Observation").search(subject=patient_id, category="laboratory").fetch_raw()
+            )
+            logger.debug("Async resources fetched:", async_resources) 
+            return async_resources
+        except ValueError as ex:
+            logger.exception(
+                f"User does not have permission to perform FHIR 'Observation' resource search operation. Caused by, ",
+                exc_info=ex,
+            )
+            return await get_operation_outcome(
+                code="forbidden",
+                diagnostics=f"The user does not have the rights to perform search operation.",
+            )
+        except OperationOutcome as ex:
+            logger.exception(
+                f"FHIR server returned an OperationOutcome error while searching the resource: 'Observation', Caused by,",
+                exc_info=ex,
+            )
+            return ex.resource["issue"] or await get_operation_outcome_exception()
+        except Exception as ex:
+            logger.exception(
+                f"An unexpected error occurred during the FHIR search operation for resource: '{type}'. Caused by, ",
+                exc_info=ex,
+            )
+        return await get_operation_outcome_exception()
+
+    @mcp.tool(
+        description=(
+            "Récupère les signes vitaux d'un patient donné en effectuant une interaction FHIR `search` sur la ressource Observation, avec en catégorie 'vital-signs', en utilisant l'identifiant du patient comme paramètre de recherche. "
+        )
+    )
+    async def get_vitals(
+        patient_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "L'identifiant du patient pour lequel récupérer les signes vitaux. Cet identifiant est en format UUID."
+                ),
+                examples=["ea66758f-4c82-4b43-9171-bc803eaac8e1", "f7d82e70-e642-44ca-9d3c-6558418a60c0"],
+            ),
+        ],
+    ) -> Annotated[
+        list[Dict[str, Any]] | Dict[str, Any],
+        Field(
+            description="Un dictionnaire contenant l'instance de ressource FHIR complète correspondant aux critères de recherche."
+        ),
+    ]:
+        try:
+            logger.debug(f"Invoked get_history with patient_id='{patient_id}'")
+            if not patient_id:
+                logger.error(
+                    "Unable to perform search operation: 'patient_id' is a mandatory field."
+                )
+                return await get_operation_outcome_required_error("patient_id")
+
+            client: AsyncFHIRClient = await get_async_fhir_client()
+            async_resources: list[Any] = (
+                await client.resources("Observation").search(subject=patient_id, category="vital-signs").fetch_raw()
+            )
+            logger.debug("Async resources fetched:", async_resources) 
+            return async_resources
+        except ValueError as ex:
+            logger.exception(
+                f"User does not have permission to perform FHIR 'Observation' resource search operation. Caused by, ",
+                exc_info=ex,
+            )
+            return await get_operation_outcome(
+                code="forbidden",
+                diagnostics=f"The user does not have the rights to perform search operation.",
+            )
+        except OperationOutcome as ex:
+            logger.exception(
+                f"FHIR server returned an OperationOutcome error while searching the resource: 'Observation', Caused by,",
+                exc_info=ex,
+            )
+            return ex.resource["issue"] or await get_operation_outcome_exception()
+        except Exception as ex:
+            logger.exception(
+                f"An unexpected error occurred during the FHIR search operation for resource: '{type}'. Caused by, ",
+                exc_info=ex,
+            )
+        return await get_operation_outcome_exception()
+
+    @mcp.tool(
+        description=(
+            "Exécute une interaction FHIR `search` standard sur un type de ressource donné, retournant un bundle ou une liste de ressources correspondantes. "
+            "Utilisez cet outil lorsque vous devez interroger plusieurs ressources sur la base d'un ou plusieurs paramètres de recherche. "
+            "N'utilisez pas cet outil pour les opérations de création, de mise à jour ou de suppression, et sachez que les grands ensembles de résultats peuvent être paginés par le serveur FHIR."
         )
     )
     async def search(
         type: Annotated[
             str,
             Field(
-                description="The FHIR resource type name. Must exactly match one of the resource types supported by the server",
+                description="Le nom du type de ressource FHIR. Doit correspondre exactement à l'un des types de ressources pris en charge par le serveur.Le nom du type de ressource FHIR. Doit correspondre exactement à l'un des types de ressources pris en charge par le serveur.",
                 examples=["MedicationRequest", "Condition", "Procedure"],
             ),
         ],
@@ -262,8 +480,8 @@ def register_mcp_tools(mcp: FastMCP) -> None:
             Dict[str, str | List[str]],
             Field(
                 description=(
-                    "A mapping of FHIR search parameter names to their values. "
-                    "Only include parameters supported for the resource type, as listed by `get_capabilities`."
+                    "Une correspondance entre les noms des paramètres de recherche FHIR et leurs valeurs. "
+                    "N'incluez que les paramètres pris en charge pour le type de ressource, comme listé par `get_capabilities`."
                 ),
                 examples=[
                     '{"family": "Smith"}',
@@ -274,7 +492,7 @@ def register_mcp_tools(mcp: FastMCP) -> None:
     ) -> Annotated[
         list[Dict[str, Any]] | Dict[str, Any],
         Field(
-            description="A dictionary containing the full FHIR resource instance matching the search criteria."
+            description="Un dictionnaire contenant l'instance de ressource FHIR complète correspondant aux critères de recherche."
         ),
     ]:
         try:
@@ -315,31 +533,29 @@ def register_mcp_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         description=(
-            "Performs a FHIR `read` interaction to retrieve a single resource instance by its type and resource ID, "
-            "optionally refining the response with search parameters or custom operations. "
-            "Use it when you know the exact resource ID and require that one resource; do not use it for bulk queries. "
-            "If additional query-level parameters or operations are needed (e.g., _elements or $validate), include them in searchParam or operation."
+            "Effectue une interaction FHIR read pour récupérer une instance unique de ressource via son type et son identifiant (resource ID), en affinant éventuellement la réponse avec des paramètres de recherche ou des opérations personnalisées."
+            "Utilisez cet outil lorsque vous connaissez l'identifiant exact de la ressource et que vous ne requérez que cette ressource spécifique ; ne l'utilisez pas pour des requêtes de masse (bulk)."
+            "Si des paramètres de requête additionnels ou des opérations au niveau de l'instance sont nécessaires (par exemple, _elements ou $validate), incluez-les dans les champs searchParam ou operation."
         )
     )
     async def read(
         type: Annotated[
             str,
             Field(
-                description="The FHIR resource type name. Must exactly match one of the resource types supported by the server.",
+                description="Le nom du type de ressource FHIR. Doit correspondre exactement à l'un des types de ressources pris en charge par le serveur.",
                 examples=["DiagnosticReport", "AllergyIntolerance", "Immunization"],
             ),
         ],
         id: Annotated[
             str,
-            Field(description="The logical ID of a specific FHIR resource instance."),
+            Field(description="Le ID logique d'une instance spécifique de ressource FHIR."),
         ],
         searchParam: Annotated[
             Dict[str, str | List[str]],
             Field(
                 description=(
-                    "A mapping of FHIR search parameter names to their desired values. "
-                    "These parameters refine queries for operation-specific query qualifiers. "
-                    "Only parameters exposed by `get_capabilities` for that resource type are valid."
+                    "Une correspondance entre les noms des paramètres de recherche FHIR et leurs valeurs. "
+                    "N'incluez que les paramètres pris en charge pour le type de ressource, comme listé par `get_capabilities`."
                 ),
                 examples=['{"device-name": "glucometer", "identifier": ["12345"]}'],
             ),
@@ -348,8 +564,8 @@ def register_mcp_tools(mcp: FastMCP) -> None:
             str,
             Field(
                 description=(
-                    "The name of a custom FHIR operation or extended query defined for the resource "
-                    "must match one of the operation names returned by `get_capabilities`."
+                    "Le nom d'une opération FHIR personnalisée ou d'une requête étendue définie pour la ressource "
+                    "doit correspondre à l'un des noms d'opération retournés par `get_capabilities`."
                 ),
                 examples=["$everything"],
             ),
@@ -357,7 +573,7 @@ def register_mcp_tools(mcp: FastMCP) -> None:
     ) -> Annotated[
         Dict[str, Any],
         Field(
-            description="A dictionary containing the single FHIR resource instance of the requested type and id."
+            description="Un dictionnaire contenant l'instance unique de la ressource FHIR correspondant au type et à l'identifiant demandés."
         ),
     ]:
         try:
@@ -409,301 +625,14 @@ def register_mcp_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         description=(
-            "Executes a FHIR `create` interaction to persist a new resource of the specified type. "
-            "It is required to supply the full resource payload in JSON form. "
-            "Use this tool when you need to add new data (e.g., a new Patient or Observation). "
-            "Note that servers may reject resources that violate profiles or mandatory bindings."
-        )
-    )
-    async def create(
-        type: Annotated[
-            str,
-            Field(
-                description="The FHIR resource type name. Must exactly match one of the resource types supported by the server.",
-                examples=["Device", "CarePlan", "Goal"],
-            ),
-        ],
-        payload: Annotated[
-            Dict[str, Any],
-            Field(
-                description=(
-                    "A JSON object representing the full FHIR resource body to be created. "
-                    "It must include all required elements of the resource's profile."
-                )
-            ),
-        ],
-        searchParam: Annotated[
-            Dict[str, str | List[str]],
-            Field(
-                description=(
-                    "A mapping of FHIR search parameter names to their desired values. "
-                    "These parameters refine queries for operation-specific query qualifiers. "
-                    "Only parameters exposed by `get_capabilities` for that resource type are valid."
-                ),
-                examples=['{"address-city": "Boston", "address-state": ["NY"]}'],
-            ),
-        ] = {},
-        operation: Annotated[
-            str,
-            Field(
-                description=(
-                    "The name of a custom FHIR operation or extended query defined for the resource"
-                    "Must match one of the operation names returned by `get_capabilities`."
-                ),
-                examples=["$evaluate"],
-            ),
-        ] = "",
-    ) -> Annotated[
-        Dict[str, Any],
-        Field(
-            description=(
-                "A dictionary containing the newly created FHIR resource, including server-assigned fields "
-                "(id, meta.versionId, meta.lastUpdated, and any server-added extensions). Reflects exactly what was persisted."
-            )
-        ),
-    ]:
-        try:
-            logger.debug(
-                f"Invoked with type='{type}', payload={payload}, searchParam={searchParam}, and operation={operation}"
-            )
-            if not type:
-                logger.error(
-                    "Unable to perform create operation: 'type' is a mandatory field."
-                )
-                return await get_operation_outcome_required_error("type")
-
-            client: AsyncFHIRClient = await get_async_fhir_client()
-            bundle: dict = await client.resource(resource_type=type).execute(
-                operation=operation or "", data=payload, params=searchParam
-            )
-
-            return await get_bundle_entries(bundle=bundle)
-        except ValueError as ex:
-            logger.exception(
-                f"User does not have permission to perform FHIR '{type}' resource create operation. Caused by, ",
-                exc_info=ex,
-            )
-            return await get_operation_outcome(
-                code="forbidden",
-                diagnostics=f"The user does not have the rights to perform create operation.",
-            )
-        except OperationOutcome as ex:
-            logger.exception(
-                f"FHIR server returned an OperationOutcome error while creating the resource: '{type}', Caused by,",
-                exc_info=ex,
-            )
-            return ex.resource["issue"] or await get_operation_outcome_exception()
-        except Exception as ex:
-            logger.exception(
-                f"An unexpected error occurred during the FHIR create operation for resource: '{type}'. Caused by, ",
-                exc_info=ex,
-            )
-        return await get_operation_outcome_exception()
-
-    @mcp.tool(
-        description=(
-            "Performs a FHIR `update` interaction by replacing an existing resource instance's content with the provided payload. "
-            "Use it when you need to overwrite a resource's data in its entirety, such as correcting or completing a record, "
-            "and you already know the resource's logical id. "
-            "Optionally, you can include searchParam for conditional updates (e.g., only update if the resource matches certain criteria) "
-            "or specify a custom operation (e.g., `$validate` to run validation before updating) "
-            "The tool returns the updated resource or an OperationOutcome detailing any errors."
-        )
-    )
-    async def update(
-        type: Annotated[
-            str,
-            Field(
-                description="The FHIR resource type name. Must exactly match one of the resource types supported by the server.",
-                examples=["Location", "Organization", "Coverage"],
-            ),
-        ],
-        id: Annotated[
-            str,
-            Field(description="The logical ID of a specific FHIR resource instance."),
-        ],
-        payload: Annotated[
-            Dict[str, Any],
-            Field(
-                description=(
-                    "The complete JSON representation of the FHIR resource, containing all required elements and any optional data. "
-                    "Servers replace the existing resource with this exact content, so the payload must include all mandatory fields "
-                    "defined by the resource's profile and any previous data you wish to preserve."
-                )
-            ),
-        ],
-        searchParam: Annotated[
-            Dict[str, str | List[str]],
-            Field(
-                description=(
-                    "A mapping of FHIR search parameter names to their desired values. "
-                    "These parameters refine queries for operation-specific query qualifiers. "
-                    "Only parameters exposed by `get_capabilities` for that resource type are valid. "
-                ),
-                examples=['{"patient":"Patient/54321","relationship":["father"]}'],
-            ),
-        ] = {},
-        operation: Annotated[
-            str,
-            Field(
-                description=(
-                    "The name of a custom FHIR operation or extended query defined for the resource"
-                    "Must match one of the operation names returned by `get_capabilities`."
-                ),
-                examples=["$lastn"],
-            ),
-        ] = "",
-    ) -> Annotated[
-        Dict[str, Any],
-        Field(description="A dictionary containing the updated FHIR resource"),
-    ]:
-        try:
-            logger.debug(
-                f"Invoked with type='{type}', id={id}, payload={payload}, searchParam={searchParam}, and operation={operation}"
-            )
-            if not type:
-                logger.error(
-                    "Unable to perform update operation: 'type' is a mandatory field."
-                )
-                return await get_operation_outcome_required_error("type")
-
-            client: AsyncFHIRClient = await get_async_fhir_client()
-            bundle: dict = await client.resource(resource_type=type, id=id).execute(
-                operation=operation or "",
-                method="PUT",
-                data={**payload, "id": id},
-                params=searchParam,
-            )
-            return await get_bundle_entries(bundle=bundle)
-        except ValueError as ex:
-            logger.exception(
-                f"User does not have permission to perform FHIR '{type}' resource update operation. Caused by, ",
-                exc_info=ex,
-            )
-            return await get_operation_outcome(
-                code="forbidden",
-                diagnostics=f"The user does not have the rights to perform update operation.",
-            )
-        except OperationOutcome as ex:
-            logger.exception(
-                f"FHIR server returned an OperationOutcome error while updating the resource: '{type}', Caused by,",
-                exc_info=ex,
-            )
-            return ex.resource["issue"] or await get_operation_outcome_exception()
-        except Exception as ex:
-            logger.exception(
-                f"An unexpected error occurred during the FHIR update operation for resource: '{type}'. Caused by, ",
-                exc_info=ex,
-            )
-        return await get_operation_outcome_exception()
-
-    @mcp.tool(
-        description=(
-            "Execute a FHIR `delete` interaction on a specific resource instance. "
-            "Use this tool when you need to remove a single resource identified by its logical ID or optionally filtered by search parameters. "
-            "The optional `id` parameter must match an existing resource instance when present. "
-            "If you include `searchParam`, the server will perform a conditional delete, deleting the resource only if it matches the given criteria. "
-            "If you supply `operation`, it will execute the named FHIR operation (e.g., `$expunge`) on the resource. "
-            "This tool returns a FHIR `OperationOutcome` describing success or failure of the deletion."
-        )
-    )
-    async def delete(
-        type: Annotated[
-            str,
-            Field(
-                description="The FHIR resource type name. Must exactly match one of the resource types supported by the server.",
-                examples=["ServiceRequest", "Appointment", "HealthcareService"],
-            ),
-        ],
-        id: Annotated[
-            str,
-            Field(description="The logical ID of a specific FHIR resource instance."),
-        ] = "",
-        searchParam: Annotated[
-            Dict[str, str | List[str]],
-            Field(
-                description=(
-                    "A mapping of FHIR search parameter names to their desired values. "
-                    "These parameters refine queries for operation-specific query qualifiers. "
-                    "Only parameters exposed by `get_capabilities` for that resource type are valid. "
-                ),
-                examples=['{"category": "laboratory", "status": ["active"]}'],
-            ),
-        ] = {},
-        operation: Annotated[
-            str,
-            Field(
-                description=(
-                    "The name of a custom FHIR operation or extended query defined for the resource"
-                    "Must match one of the operation names returned by `get_capabilities`."
-                ),
-                examples=["$expand"],
-            ),
-        ] = "",
-    ) -> Annotated[
-        Dict[str, Any],
-        Field(
-            description="A dictionary containing the confirmation of deletion or details on why deletion failed."
-        ),
-    ]:
-        try:
-            logger.debug(
-                f"Invoked with type='{type}', id={id}, searchParam={searchParam}, and operation={operation}"
-            )
-            if not type:
-                logger.error(
-                    "Unable to perform delete operation: 'type' is a mandatory field."
-                )
-                return await get_operation_outcome_required_error("type")
-            if not id and not searchParam:
-                logger.error(
-                    "Unable to perform delete operation: 'id' or 'searchParam' is required."
-                )
-                return await get_operation_outcome_required_error("id")
-
-            client: AsyncFHIRClient = await get_async_fhir_client()
-            bundle = await client.resource(resource_type=type, id=id).execute(
-                operation=operation or "", method="DELETE", params=searchParam
-            )
-            if isinstance(bundle, Dict):
-                return await get_bundle_entries(bundle=bundle)
-            return await get_operation_outcome(
-                severity="information",
-                code="SUCCESSFUL_DELETE",
-                diagnostics="Successfully deleted resource(s).",
-            )
-        except ValueError as ex:
-            logger.exception(
-                f"User does not have permission to perform FHIR '{type}' resource delete operation. Caused by, ",
-                exc_info=ex,
-            )
-            return await get_operation_outcome(
-                code="forbidden",
-                diagnostics=f"The user does not have the rights to perform delete operation.",
-            )
-        except OperationOutcome as ex:
-            logger.exception(
-                f"FHIR server returned an OperationOutcome error while deleting the resource: '{type}', Caused by,",
-                exc_info=ex,
-            )
-            return ex.resource["issue"] or await get_operation_outcome_exception()
-        except Exception as ex:
-            logger.exception(
-                f"An unexpected error occurred during the FHIR delete operation for resource: '{type}'. Caused by, ",
-                exc_info=ex,
-            )
-        return await get_operation_outcome_exception()
-
-    @mcp.tool(
-        description=(
-            "Retrieves the authenticated user's FHIR profile. "
-            "Use this tool when you need to access the current user's demographic and contact details."
+            "Récupère le profile FHIR de l'utilisateur authentifié en effectuant une interaction FHIR `read` sur la ressource identifiée par le token d'accès de l'utilisateur. "
+            "Utilisez cet outil pour obtenir les informations démographiques de base de l'utilisateur (telles que 'id', 'name', 'birthDate') à partir de son profil FHIR, en supposant que le token d'accès contient les références nécessaires pour localiser la ressource utilisateur correspondante sur le serveur FHIR. "
         )
     )
     async def get_user() -> Annotated[
         list[Dict[str, Any]] | Dict[str, Any],
         Field(
-            description="A dictionary containing the authenticated user's demographic information such as 'id', 'name', and 'birthDate'."
+            description="Un dictionnaire contenant les informations démographiques de l'utilisateur authentifié, telles que 'id', 'name', et 'birthDate'."
         ),
     ]:
         try:
